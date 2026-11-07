@@ -1,0 +1,9 @@
+# What was adapted from other repos. Tab-separated: cstack skill, git URL, upstream path, commit adapted from.
+# `cstack upstream` lists upstream changes since then. Update the commit after taking upstream changes.
+full-stop	https://github.com/t3dotgg/tstack	skills/full-stop	1085050f3baed1ac724caa4a8166145fb2ac88af
+full-stop	https://github.com/t3dotgg/tstack	skills/file-pr	1085050f3baed1ac724caa4a8166145fb2ac88af
+full-stop	https://github.com/t3dotgg/tstack	skills/babysit-pr	1085050f3baed1ac724caa4a8166145fb2ac88af
+full-stop	https://github.com/t3dotgg/tstack	skills/leaving-pr-comments	1085050f3baed1ac724caa4a8166145fb2ac88af
+full-send	https://github.com/t3dotgg/tstack	skills/full-send	1085050f3baed1ac724caa4a8166145fb2ac88af
+cstack-break	https://github.com/t3dotgg/tstack	skills/sol-loop	1085050f3baed1ac724caa4a8166145fb2ac88af
+cstack-break	https://github.com/t3dotgg/tstack	skills/council	1085050f3baed1ac724caa4a8166145fb2ac88af

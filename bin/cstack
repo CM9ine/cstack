@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# cstack: link this repo's skills into Claude Code and Codex on this machine.
+#
+#   cstack install     link every skill and this command (safe to rerun)
+#   cstack update      git pull --ff-only, then install
+#   cstack status      show the checkout and what is linked where
+#   cstack uninstall   remove every link that points into this checkout
+#   cstack upstream [skill]
+#                      list skills adapted from other repos that changed upstream since they
+#                      were copied; with a skill name, print the upstream diff
+#
+# Skills are symlinks into this checkout, so an edit here reaches every harness at once and
+# `git pull` is the whole update. A file that is not a cstack link is never replaced: it is
+# reported and skipped. Written for bash 3.2 so it runs on stock macOS.
+
+set -euo pipefail
+
+resolve() {
+  # Portable `readlink -f`: follow a chain of symlinks to the real path.
+  local path="$1" dir link
+  while [ -L "$path" ]; do
+    dir="$(cd -P "$(dirname "$path")" && pwd)"
+    link="$(readlink "$path")"
+    case "$link" in /*) path="$link" ;; *) path="$dir/$link" ;; esac
+  done
+  echo "$(cd -P "$(dirname "$path")" && pwd)/$(basename "$path")"
+}
+
+CSTACK_DIR="$(cd -P "$(dirname "$(resolve "${BASH_SOURCE[0]}")")/.." && pwd)"
+# Claude Code reads ~/.claude/skills. Codex reads the shared Agent Skills folder ~/.agents/skills.
+SKILL_TARGETS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills $HOME/.agents/skills"
+BIN_LINK="$HOME/.local/bin/cstack"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cstack"
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'cstack: %s\n' "$*" >&2; }
+
+# True when $1 is a symlink whose target lives inside this checkout.
+ours() {
+  [ -L "$1" ] || return 1
+  case "$(readlink "$1")" in "$CSTACK_DIR"/*) return 0 ;; *) return 1 ;; esac
+}
+
+# link SRC DEST: point DEST at SRC, unless DEST is something cstack did not make.
+link() {
+  local src="$1" dest="$2"
+  if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then
+    return 0
+  fi
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    if ours "$dest"; then
+      rm "$dest"
+    else
+      warn "skipped $dest: it exists and is not a cstack link. Move it aside and rerun."
+      return 0
+    fi
+  fi
+  mkdir -p "$(dirname "$dest")"
+  ln -s "$src" "$dest"
+  say "linked $dest"
+}
+
+skills() {
+  local d
+  for d in "$CSTACK_DIR"/skills/*/; do
+    [ -f "$d/SKILL.md" ] && basename "$d"
+  done
+}
+
+cmd_install() {
+  local target name entry
+  for target in $SKILL_TARGETS; do
+    for name in $(skills); do
+      link "$CSTACK_DIR/skills/$name" "$target/$name"
+    done
+    # Drop links to skills that were renamed or removed from the repo.
+    for entry in "$target"/*; do
+      if ours "$entry" && [ ! -e "$entry" ]; then
+        rm "$entry"
+        say "removed stale $entry"
+      fi
+    done
+  done
+  link "$CSTACK_DIR/bin/cstack" "$BIN_LINK"
+  say "cstack: $(skills | wc -l | tr -d ' ') skills from $CSTACK_DIR"
+}
+
+cmd_update() {
+  git -C "$CSTACK_DIR" pull --ff-only
+  cmd_install
+}
+
+state_of() {
+  if ours "$1"; then
+    if [ -e "$1" ]; then echo "linked"; else echo "broken link"; fi
+  elif [ -e "$1" ] || [ -L "$1" ]; then
+    echo "not cstack's (skipped)"
+  else
+    echo "missing (run cstack install)"
+  fi
+}
+
+cmd_status() {
+  local target name
+  say "checkout: $CSTACK_DIR"
+  git -C "$CSTACK_DIR" status --short --branch | head -20
+  for target in $SKILL_TARGETS; do
+    say ""
+    say "$target"
+    for name in $(skills); do
+      printf '  %-16s %s\n' "$name" "$(state_of "$target/$name")"
+    done
+  done
+  say ""
+  printf '%s: %s\n' "$BIN_LINK" "$(state_of "$BIN_LINK")"
+}
+
+cmd_uninstall() {
+  local target entry
+  for target in $SKILL_TARGETS; do
+    for entry in "$target"/*; do
+      if ours "$entry"; then
+        rm "$entry"
+        say "removed $entry"
+      fi
+    done
+  done
+  if ours "$BIN_LINK"; then
+    rm "$BIN_LINK"
+    say "removed $BIN_LINK"
+  fi
+}
+
+# upstream.tsv columns: skill, git URL, path in that repo, commit it was adapted from.
+cmd_upstream() {
+  local only="${1:-}" skill url path commit repo_dir changed fetched="|"
+  while IFS="$(printf '\t')" read -r skill url path commit; do
+    case "$skill" in ''|'#'*) continue ;; esac
+    if [ -n "$only" ] && [ "$only" != "$skill" ]; then continue; fi
+    repo_dir="$CACHE_DIR/upstream/$(printf '%s' "$url" | sed 's|^https://||; s|[/:]|_|g')"
+    if [ ! -d "$repo_dir/.git" ]; then
+      git clone --quiet --filter=blob:none "$url" "$repo_dir"
+    elif ! printf '%s' "$fetched" | grep -qF "|$repo_dir|"; then
+      git -C "$repo_dir" fetch --quiet origin
+    fi
+    fetched="$fetched$repo_dir|"
+    if [ -n "$only" ]; then
+      git -C "$repo_dir" --no-pager diff "$commit" origin/HEAD -- "$path"
+      continue
+    fi
+    changed="$(git -C "$repo_dir" diff --stat "$commit" origin/HEAD -- "$path" | tail -1)"
+    printf '%-16s %-40s %s\n' "$skill" "$path" "${changed:-unchanged since ${commit:0:7}}"
+  done < "$CSTACK_DIR/upstream.tsv"
+}
+
+case "${1:-}" in
+  install) cmd_install ;;
+  update) cmd_update ;;
+  status) cmd_status ;;
+  uninstall) cmd_uninstall ;;
+  upstream) shift; cmd_upstream "${1:-}" ;;
+  *) sed -n '2,12p' "$(resolve "$0")" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
